@@ -89,6 +89,8 @@ class AudioEngine:
             Track(name=f"Track {i+1}", sample_rate=self.sample_rate, max_seconds=self.max_seconds)
             for i in range(4)
         ]
+        self._live_lock = threading.Lock()
+        self._live_waveforms: List[np.ndarray | None] = [None] * len(self.tracks)
         self.master_eq: List[EQBand] = []
         self.master_compressor: Optional[CompressorSettings] = None
         self.master_gain_db: float = 0.0
@@ -145,6 +147,13 @@ class AudioEngine:
         self._record_buffer = []
         self._record_stop.clear()
         self._is_recording = True
+        armed_indices = [idx for idx, track in enumerate(self.tracks) if track.armed]
+        if not armed_indices:
+            self._is_recording = False
+            return
+        with self._live_lock:
+            for idx in range(len(self._live_waveforms)):
+                self._live_waveforms[idx] = None
 
         def _record_worker() -> None:
             channels = 2 if any(track.stereo for track in self.tracks) else 1
@@ -165,6 +174,23 @@ class AudioEngine:
                     print("Recording status:", status)
                 recorded.append(indata.copy())
                 total_frames = sum(chunk.shape[0] for chunk in recorded)
+                with self._live_lock:
+                    for track_index in armed_indices:
+                        track = self.tracks[track_index]
+                        chunk = indata.astype(np.float32)
+                        if not track.stereo and chunk.shape[1] == 2:
+                            chunk = chunk.mean(axis=1, keepdims=True)
+                        elif track.stereo and chunk.shape[1] == 1:
+                            chunk = np.repeat(chunk, 2, axis=1)
+                        existing = self._live_waveforms[track_index]
+                        if existing is None:
+                            preview = chunk.copy()
+                        else:
+                            preview = np.concatenate((existing, chunk), axis=0)
+                        max_samples = int(track.max_seconds * track.sample_rate)
+                        if preview.shape[0] > max_samples:
+                            preview = preview[-max_samples:]
+                        self._live_waveforms[track_index] = preview
                 if total_frames >= duration_limit or self._record_stop.is_set():
                     raise sd.CallbackStop()
 
@@ -196,11 +222,25 @@ class AudioEngine:
             self._record_thread.join()
         audio = self._record_buffer
         if audio is None or audio.size == 0:
+            with self._live_lock:
+                for idx in range(len(self._live_waveforms)):
+                    self._live_waveforms[idx] = None
             return
-        for track in self.tracks:
+        for idx, track in enumerate(self.tracks):
             if track.armed:
                 track.set_data(audio, self.sample_rate)
                 track.apply_processing()
+            with self._live_lock:
+                self._live_waveforms[idx] = None
+
+    def get_live_waveform(self, index: int) -> np.ndarray | None:
+        with self._live_lock:
+            if not (0 <= index < len(self._live_waveforms)):
+                return None
+            data = self._live_waveforms[index]
+            if data is None:
+                return None
+            return data.copy()
 
     # Playback ----------------------------------------------------------
     def _render_mixdown(self) -> np.ndarray:
@@ -256,6 +296,12 @@ class AudioEngine:
         if self._play_thread:
             self._play_thread.join()
         self._is_playing = False
+
+    def is_recording(self) -> bool:
+        return self._is_recording
+
+    def is_playing(self) -> bool:
+        return self._is_playing
 
     # Editing -----------------------------------------------------------
     def crop_track(self, track_index: int, start_sec: float, end_sec: float) -> None:
