@@ -257,6 +257,12 @@ class AudioEngine:
             self._play_thread.join()
         self._is_playing = False
 
+    def is_recording(self) -> bool:
+        return self._is_recording
+
+    def is_playing(self) -> bool:
+        return self._is_playing
+
     # Editing -----------------------------------------------------------
     def crop_track(self, track_index: int, start_sec: float, end_sec: float) -> None:
         track = self.tracks[track_index]
