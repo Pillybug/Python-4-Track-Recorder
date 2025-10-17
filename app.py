@@ -14,19 +14,20 @@ from eq import EQBand, default_eq_bands
 from storage import save_session
 
 PALETTE = {
-    "background": "#f8f4e3",
-    "primary": "#5b4636",
-    "accent": "#4c8c6b",
-    "accent_active": "#62b188",
+    "background": "#fff3df",
+    "primary": "#5a4031",
+    "accent": "#7cbf9b",
+    "accent_active": "#9fd7b5",
     "record": "#c0392b",
     "record_active": "#ff4b3e",
-    "record_arm": "#e7a04e",
-    "highlight": "#e4d7c5",
-    "timeline_bg": "#f3ebdc",
-    "timeline_grid": "#e2d6c5",
-    "timeline_major": "#d4c6b4",
-    "waveform": "#2a4f6e",
-    "waveform_fill": "#7aa2c2",
+    "record_arm": "#f2c078",
+    "highlight": "#f8dfc8",
+    "timeline_bg": "#fcebd8",
+    "timeline_grid": "#eedcc7",
+    "timeline_major": "#dec7ad",
+    "waveform": "#314d79",
+    "waveform_fill": "#8fb5de",
+    "waveform_live": "#ff8b75",
 }
 
 
@@ -100,6 +101,7 @@ class WaveformView(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._waveform: np.ndarray | None = None
+        self._live_mode = False
         self.setMinimumHeight(140)
         self.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
@@ -116,6 +118,11 @@ class WaveformView(QtWidgets.QWidget):
             max_val = peak if peak != 0 else 1.0
             self._waveform = (audio / max_val).astype(np.float32)
         self.update()
+
+    def set_live_mode(self, active: bool) -> None:
+        if self._live_mode != active:
+            self._live_mode = active
+            self.update()
 
     def _build_path(self, width: int, height: int) -> QtGui.QPainterPath | None:
         if self._waveform is None or width <= 0:
@@ -154,7 +161,14 @@ class WaveformView(QtWidgets.QWidget):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
         rect = self.rect()
-        painter.fillRect(rect, QtGui.QColor(255, 255, 255, 40))
+        gradient = QtGui.QLinearGradient(rect.topLeft(), rect.bottomRight())
+        if self._live_mode:
+            gradient.setColorAt(0.0, QtGui.QColor(PALETTE["waveform_live"]).lighter(140))
+            gradient.setColorAt(1.0, QtGui.QColor(PALETTE["waveform_live"]).lighter(190))
+        else:
+            gradient.setColorAt(0.0, QtGui.QColor(255, 255, 255, 120))
+            gradient.setColorAt(1.0, QtGui.QColor(PALETTE["highlight"]))
+        painter.fillRect(rect, gradient)
 
         painter.setPen(QtGui.QPen(QtGui.QColor(PALETTE["timeline_grid"])))
         for y in range(0, rect.height(), 30):
@@ -165,38 +179,213 @@ class WaveformView(QtWidgets.QWidget):
             painter.setPen(QtGui.QPen(QtGui.QColor(PALETTE["primary"])))
             painter.drawText(rect, QtCore.Qt.AlignmentFlag.AlignCenter, "No audio yet")
         else:
-            painter.setBrush(QtGui.QColor(PALETTE["waveform_fill"]))
+            fill_color = QtGui.QColor(PALETTE["waveform_fill"])
+            if self._live_mode:
+                fill_color = QtGui.QColor(PALETTE["waveform_live"])
+            painter.setBrush(fill_color)
             painter.setPen(QtGui.QPen(QtGui.QColor(PALETTE["waveform"]), 1.2))
             painter.drawPath(path)
 
         super().paintEvent(event)
 
 
+class EQCurveWidget(QtWidgets.QWidget):
+    """Visual preview of the EQ response curve."""
+
+    def __init__(self, bands: List[EQBand], parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._bands = [EQBand(b.low_freq, b.high_freq, b.gain_db) for b in bands]
+        self.setMinimumHeight(200)
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+
+    def set_bands(self, bands: List[EQBand]) -> None:
+        self._bands = [EQBand(b.low_freq, b.high_freq, b.gain_db) for b in bands]
+        self.update()
+
+    @staticmethod
+    def _gaussian_response(freqs: np.ndarray, band: EQBand) -> np.ndarray:
+        low = max(band.low_freq, 20)
+        high = max(band.high_freq, low + 1)
+        center = np.sqrt(low * high)
+        width = max(np.log10(high) - np.log10(low), 1e-3)
+        sigma = width / 2.5
+        exponent = (np.log10(freqs) - np.log10(center)) / sigma
+        return band.gain_db * np.exp(-0.5 * exponent**2)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: D401,N802
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        rect = self.rect().adjusted(12, 12, -12, -12)
+
+        bg = QtGui.QLinearGradient(rect.topLeft(), rect.bottomRight())
+        bg.setColorAt(0.0, QtGui.QColor(PALETTE["highlight"]))
+        bg.setColorAt(1.0, QtGui.QColor(255, 255, 255, 180))
+        painter.fillRect(rect, bg)
+
+        painter.setPen(QtGui.QPen(QtGui.QColor(PALETTE["timeline_grid"])) )
+        for step in range(5):
+            y = rect.top() + step * rect.height() / 4
+            painter.drawLine(rect.left(), int(y), rect.right(), int(y))
+
+        freq_ticks = [20, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 20000]
+        min_log = np.log10(20)
+        max_log = np.log10(20000)
+        painter.setPen(QtGui.QPen(QtGui.QColor(PALETTE["timeline_major"])) )
+        for freq in freq_ticks:
+            pos = (np.log10(freq) - min_log) / (max_log - min_log)
+            x = rect.left() + pos * rect.width()
+            painter.drawLine(int(x), rect.top(), int(x), rect.bottom())
+
+        if not self._bands:
+            painter.setPen(QtGui.QPen(QtGui.QColor(PALETTE["primary"])))
+            painter.drawText(rect, QtCore.Qt.AlignmentFlag.AlignCenter, "No EQ bands")
+            return
+
+        freqs = np.logspace(min_log, max_log, num=400)
+        response = np.zeros_like(freqs)
+        for band in self._bands:
+            response += self._gaussian_response(freqs, band)
+
+        path = QtGui.QPainterPath()
+        mid_y = rect.center().y()
+        max_gain = max(12.0, float(np.max(np.abs(response))) or 0.0)
+        gain_scale = (rect.height() / 2) * 0.85 / max_gain
+        for idx, (freq, gain) in enumerate(zip(freqs, response)):
+            pos = (np.log10(freq) - min_log) / (max_log - min_log)
+            x = rect.left() + pos * rect.width()
+            y = mid_y - gain * gain_scale
+            if idx == 0:
+                path.moveTo(x, y)
+            else:
+                path.lineTo(x, y)
+
+        painter.setPen(QtGui.QPen(QtGui.QColor(PALETTE["waveform"]), 2.5))
+        painter.drawPath(path)
+
+        fill_path = QtGui.QPainterPath(path)
+        fill_path.lineTo(rect.right(), mid_y)
+        fill_path.lineTo(rect.left(), mid_y)
+        fill_path.closeSubpath()
+        painter.fillPath(fill_path, QtGui.QColor(PALETTE["waveform_fill"]).lighter(140))
+
+
 class EQDialog(QtWidgets.QDialog):
     def __init__(self, bands: List[EQBand], parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("8-Band EQ")
-        self._sliders: List[QtWidgets.QSlider] = []
-        layout = QtWidgets.QGridLayout(self)
-        for idx, band in enumerate(bands):
-            label = QtWidgets.QLabel(f"{int(band.low_freq)}-{int(band.high_freq)} Hz")
+        self._bands = [EQBand(b.low_freq, b.high_freq, b.gain_db) for b in bands]
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        self._curve = EQCurveWidget(self._bands)
+        layout.addWidget(self._curve)
+
+        control_grid = QtWidgets.QHBoxLayout()
+        control_grid.setSpacing(16)
+        layout.addLayout(control_grid)
+
+        self._gain_sliders: List[QtWidgets.QSlider] = []
+        self._range_labels: List[QtWidgets.QLabel] = []
+        self._low_spins: List[QtWidgets.QDoubleSpinBox] = []
+        self._high_spins: List[QtWidgets.QDoubleSpinBox] = []
+        self._gain_labels: List[QtWidgets.QLabel] = []
+
+        for idx, band in enumerate(self._bands):
+            column = QtWidgets.QWidget()
+            column_layout = QtWidgets.QVBoxLayout(column)
+            column_layout.setSpacing(6)
+            column_layout.setContentsMargins(0, 0, 0, 0)
+
+            header = QtWidgets.QLabel(f"Band {idx + 1}")
+            header.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            header.setStyleSheet("font-weight: 600;")
+            column_layout.addWidget(header)
+
+            range_label = QtWidgets.QLabel()
+            range_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            column_layout.addWidget(range_label)
+            self._range_labels.append(range_label)
+
+            gain_label = QtWidgets.QLabel()
+            gain_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            column_layout.addWidget(gain_label)
+            self._gain_labels.append(gain_label)
+
             slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Vertical)
-            slider.setRange(-12, 12)
-            slider.setValue(int(band.gain_db))
-            slider.setTickInterval(3)
+            slider.setRange(-180, 180)
+            slider.setSingleStep(5)
+            slider.setValue(int(band.gain_db * 10))
+            slider.setTickInterval(30)
             slider.setTickPosition(QtWidgets.QSlider.TickPosition.TicksLeft)
-            layout.addWidget(label, 0, idx)
-            layout.addWidget(slider, 1, idx)
-            self._sliders.append(slider)
+            slider.valueChanged.connect(lambda value, i=idx: self._on_gain_changed(i, value))
+            column_layout.addWidget(slider, stretch=1)
+            self._gain_sliders.append(slider)
+
+            low_spin = QtWidgets.QDoubleSpinBox()
+            low_spin.setRange(20.0, 19900.0)
+            low_spin.setDecimals(1)
+            low_spin.setSuffix(" Hz")
+            low_spin.setValue(band.low_freq)
+            low_spin.valueChanged.connect(lambda value, i=idx: self._on_low_changed(i, value))
+            column_layout.addWidget(low_spin)
+            self._low_spins.append(low_spin)
+
+            high_spin = QtWidgets.QDoubleSpinBox()
+            high_spin.setRange(30.0, 20000.0)
+            high_spin.setDecimals(1)
+            high_spin.setSuffix(" Hz")
+            high_spin.setValue(band.high_freq)
+            high_spin.valueChanged.connect(lambda value, i=idx: self._on_high_changed(i, value))
+            column_layout.addWidget(high_spin)
+            self._high_spins.append(high_spin)
+
+            control_grid.addWidget(column)
+
+        self._sync_labels()
+
         button_box = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel
         )
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box, 2, 0, 1, len(bands))
+        layout.addWidget(button_box)
 
-    def gains(self) -> List[float]:
-        return [slider.value() for slider in self._sliders]
+    def _sync_labels(self) -> None:
+        for idx, band in enumerate(self._bands):
+            self._range_labels[idx].setText(f"{int(band.low_freq)} – {int(band.high_freq)} Hz")
+            self._gain_labels[idx].setText(f"{band.gain_db:+.1f} dB")
+        self._curve.set_bands(self._bands)
+
+    def _on_gain_changed(self, index: int, value: int) -> None:
+        self._bands[index].gain_db = value / 10
+        self._gain_labels[index].setText(f"{self._bands[index].gain_db:+.1f} dB")
+        self._curve.set_bands(self._bands)
+
+    def _on_low_changed(self, index: int, value: float) -> None:
+        high = self._bands[index].high_freq
+        if value >= high - 10:
+            value = high - 10
+            self._low_spins[index].blockSignals(True)
+            self._low_spins[index].setValue(value)
+            self._low_spins[index].blockSignals(False)
+        self._bands[index].low_freq = max(20.0, value)
+        self._sync_labels()
+
+    def _on_high_changed(self, index: int, value: float) -> None:
+        low = self._bands[index].low_freq
+        if value <= low + 10:
+            value = low + 10
+            self._high_spins[index].blockSignals(True)
+            self._high_spins[index].setValue(value)
+            self._high_spins[index].blockSignals(False)
+        self._bands[index].high_freq = min(20000.0, value)
+        self._sync_labels()
+
+    def settings(self) -> List[EQBand]:
+        return [EQBand(b.low_freq, b.high_freq, b.gain_db) for b in self._bands]
 
 
 class CompressorDialog(QtWidgets.QDialog):
@@ -259,10 +448,11 @@ class TrackWidget(QtWidgets.QFrame):
         self.setMinimumHeight(220)
         self.setStyleSheet(
             "#trackFrame {"
-            "    background-color: rgba(255, 255, 255, 0.35);"
+            "    background-color: rgba(255, 244, 226, 0.7);"
             "    border-radius: 18px;"
             "    border: 1px solid %s;"
-            "}" % PALETTE["timeline_grid"]
+            "    box-shadow: 0 12px 30px rgba(154, 127, 92, 0.18);"
+            "}" % PALETTE["highlight"]
         )
         layout = QtWidgets.QVBoxLayout(self)
         layout.setSpacing(14)
@@ -425,7 +615,7 @@ class TrackWidget(QtWidgets.QFrame):
         move_layout.addWidget(move_button)
         layout.addLayout(move_layout)
 
-    def update_from_track(self, track: Track) -> None:
+    def update_from_track(self, track: Track, live_audio: np.ndarray | None = None) -> None:
         self.title.setText(track.name or f"Track {self.index + 1}")
         self._sync_button(self.record_button, track.armed)
         self.record_button.setText("Armed" if track.armed else "Arm")
@@ -434,7 +624,12 @@ class TrackWidget(QtWidgets.QFrame):
         self.gain_slider.blockSignals(True)
         self.gain_slider.setValue(int(track.gain_db * 10))
         self.gain_slider.blockSignals(False)
-        self.waveform.set_waveform(track.data)
+        if live_audio is not None:
+            self.waveform.set_waveform(live_audio)
+            self.waveform.set_live_mode(True)
+        else:
+            self.waveform.set_waveform(track.data)
+            self.waveform.set_live_mode(False)
 
     @staticmethod
     def _sync_button(button: QtWidgets.QAbstractButton, state: bool) -> None:
@@ -762,8 +957,9 @@ class MainWindow(QtWidgets.QMainWindow):
         main_layout.addWidget(self.master_section)
 
     def _refresh_track_views(self) -> None:
-        for widget, track in zip(self.track_widgets, self.engine.tracks):
-            widget.update_from_track(track)
+        for idx, (widget, track) in enumerate(zip(self.track_widgets, self.engine.tracks)):
+            live_audio = self.engine.get_live_waveform(idx)
+            widget.update_from_track(track, live_audio)
 
     @staticmethod
     def _apply_button_glow(button: QtWidgets.QAbstractButton, color: str, active: bool) -> None:
@@ -815,6 +1011,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self._apply_button_glow(self.record_button, PALETTE["record_active"], True)
             self._apply_button_glow(self.tape_deck.record_button, PALETTE["record_active"], True)
             self.engine.start_recording()
+            if not self.engine.is_recording():
+                self._apply_button_glow(self.record_button, PALETTE["record_active"], False)
+                self._apply_button_glow(self.tape_deck.record_button, PALETTE["record_active"], False)
+                self._set_button_state(self.record_button, False)
+                self._set_button_state(self.tape_deck.record_button, False)
         else:
             self._stop_recording()
 
@@ -833,6 +1034,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.engine.start_recording()
             self._apply_button_glow(self.record_button, PALETTE["record_active"], True)
             self._apply_button_glow(self.tape_deck.record_button, PALETTE["record_active"], True)
+            if not self.engine.is_recording():
+                self._apply_button_glow(self.record_button, PALETTE["record_active"], False)
+                self._apply_button_glow(self.tape_deck.record_button, PALETTE["record_active"], False)
+                self._set_button_state(self.record_button, False)
+                self._set_button_state(self.tape_deck.record_button, False)
 
     def _poll_engine_state(self) -> None:
         playing = self.engine.is_playing()
@@ -854,6 +1060,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._set_button_state(self.tape_deck.record_button, True)
             self._apply_button_glow(self.record_button, PALETTE["record_active"], True)
             self._apply_button_glow(self.tape_deck.record_button, PALETTE["record_active"], True)
+            self._refresh_track_views()
         elif self._last_recording_state:
             self._apply_button_glow(self.record_button, PALETTE["record_active"], False)
             self._apply_button_glow(self.tape_deck.record_button, PALETTE["record_active"], False)
@@ -898,7 +1105,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.engine.tracks[index].armed = state
         self._set_button_state(self.tape_deck.track_buttons[index], state)
         self._set_button_state(self.track_widgets[index].record_button, state)
-        self.track_widgets[index].update_from_track(self.engine.tracks[index])
+        live_audio = self.engine.get_live_waveform(index)
+        self.track_widgets[index].update_from_track(self.engine.tracks[index], live_audio)
 
     @staticmethod
     def _set_button_state(button: QtWidgets.QAbstractButton, state: bool) -> None:
@@ -928,9 +1136,7 @@ class MainWindow(QtWidgets.QMainWindow):
             track.eq_bands = default_eq_bands()
         dialog = EQDialog(track.eq_bands, self)
         if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
-            gains = dialog.gains()
-            for band, gain in zip(track.eq_bands, gains):
-                band.gain_db = gain
+            track.eq_bands = dialog.settings()
             if track.data is not None:
                 track.apply_processing()
             self._refresh_track_views()
@@ -960,9 +1166,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.engine.master_eq = default_eq_bands()
         dialog = EQDialog(self.engine.master_eq, self)
         if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
-            gains = dialog.gains()
-            for band, gain in zip(self.engine.master_eq, gains):
-                band.gain_db = gain
+            self.engine.master_eq = dialog.settings()
 
     def _edit_master_compressor(self) -> None:
         dialog = CompressorDialog(self.engine.master_compressor, self)
