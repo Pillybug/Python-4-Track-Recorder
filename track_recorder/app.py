@@ -6,10 +6,22 @@ from pathlib import Path
 from typing import List
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from .audio_engine import AudioEngine
-from .compressor import CompressorSettings
-from .eq import EQBand, default_eq_bands
-from .storage import save_session
+
+# Allow running the module both as ``python -m track_recorder.app`` (package import)
+# and ``python track_recorder/app.py`` (script execution). The project previously
+# relied purely on relative imports which fail when the file is executed directly,
+# so we normalise ``sys.path`` before importing other project modules.
+if __package__ in {None, ""}:
+    sys.path.append(str(Path(__file__).resolve().parent.parent))
+    from track_recorder.audio_engine import AudioEngine  # type: ignore
+    from track_recorder.compressor import CompressorSettings  # type: ignore
+    from track_recorder.eq import EQBand, default_eq_bands  # type: ignore
+    from track_recorder.storage import save_session  # type: ignore
+else:
+    from .audio_engine import AudioEngine
+    from .compressor import CompressorSettings
+    from .eq import EQBand, default_eq_bands
+    from .storage import save_session
 
 PALETTE = {
     "background": "#fbffc1",
