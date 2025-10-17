@@ -106,28 +106,46 @@ class AudioEngine:
     # Device management -------------------------------------------------
     @staticmethod
     def list_input_devices() -> List[Tuple[int, str]]:
-        devices = []
-        for idx, device in enumerate(sd.query_devices()):
+        devices: List[Tuple[int, str]] = []
+        try:
+            queried = sd.query_devices()
+        except Exception as exc:  # pragma: no cover - depends on host audio stack
+            print("Unable to query input devices:", exc)
+            return devices
+        for idx, device in enumerate(queried):
             if device["max_input_channels"] >= 1:
                 devices.append((idx, device["name"]))
         return devices
 
     @staticmethod
     def list_output_devices() -> List[Tuple[int, str]]:
-        devices = []
-        for idx, device in enumerate(sd.query_devices()):
+        devices: List[Tuple[int, str]] = []
+        try:
+            queried = sd.query_devices()
+        except Exception as exc:  # pragma: no cover - depends on host audio stack
+            print("Unable to query output devices:", exc)
+            return devices
+        for idx, device in enumerate(queried):
             if device["max_output_channels"] >= 1:
                 devices.append((idx, device["name"]))
         return devices
 
     def set_input_device(self, device_id: int) -> None:
-        info = sd.query_devices(device_id)
+        try:
+            info = sd.query_devices(device_id)
+        except Exception as exc:  # pragma: no cover - depends on host audio stack
+            print("Unable to select input device:", exc)
+            return
         if info["max_input_channels"] < 1:
             raise ValueError("Selected device has no input channels")
         self.input_device = device_id
 
     def set_output_device(self, device_id: int) -> None:
-        info = sd.query_devices(device_id)
+        try:
+            info = sd.query_devices(device_id)
+        except Exception as exc:  # pragma: no cover - depends on host audio stack
+            print("Unable to select output device:", exc)
+            return
         if info["max_output_channels"] < 1:
             raise ValueError("Selected device has no output channels")
         self.output_device = device_id

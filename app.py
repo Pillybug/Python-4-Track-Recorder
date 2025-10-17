@@ -1178,16 +1178,34 @@ class MainWindow(QtWidgets.QMainWindow):
         self._output_devices = AudioEngine.list_output_devices()
         self.input_combo.clear()
         self.output_combo.clear()
-        for _, name in self._input_devices:
-            self.input_combo.addItem(name)
-        for _, name in self._output_devices:
-            self.output_combo.addItem(name)
         if self._input_devices:
+            for _, name in self._input_devices:
+                self.input_combo.addItem(name)
+            self.input_combo.setEnabled(True)
             self.input_combo.setCurrentIndex(0)
             self._set_input_device(0)
+        else:
+            self.input_combo.addItem("No input devices found")
+            self.input_combo.setEnabled(False)
         if self._output_devices:
+            for _, name in self._output_devices:
+                self.output_combo.addItem(name)
+            self.output_combo.setEnabled(True)
             self.output_combo.setCurrentIndex(0)
             self._set_output_device(0)
+        else:
+            self.output_combo.addItem("No output devices found")
+            self.output_combo.setEnabled(False)
+        if not self._input_devices or not self._output_devices:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Audio devices unavailable",
+                (
+                    "The recorder could not find an audio input or output device. "
+                    "The application will stay open, but recording and playback "
+                    "require an available audio interface."
+                ),
+            )
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: D401,N802
         super().resizeEvent(event)
