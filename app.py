@@ -100,6 +100,37 @@ def create_transport_icon(kind: str, size: int = 64) -> QtGui.QIcon:
     return QtGui.QIcon(pixmap)
 
 
+def create_transport_icon(kind: str, size: int = 64) -> QtGui.QIcon:
+    """Create an in-memory icon for transport controls."""
+
+    pixmap = QtGui.QPixmap(size, size)
+    pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+    painter = QtGui.QPainter(pixmap)
+    painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+    rect = QtCore.QRectF(6, 6, size - 12, size - 12)
+
+    if kind == "record":
+        painter.setBrush(QtGui.QColor(PALETTE["record_active"]))
+        painter.setPen(QtGui.QPen(QtGui.QColor(PALETTE["record_active"])))
+        painter.drawEllipse(rect)
+    elif kind == "play":
+        painter.setBrush(QtGui.QColor(PALETTE["accent_active"]))
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        path = QtGui.QPainterPath()
+        path.moveTo(rect.left(), rect.top())
+        path.lineTo(rect.right(), rect.center().y())
+        path.lineTo(rect.left(), rect.bottom())
+        path.closeSubpath()
+        painter.drawPath(path)
+    else:
+        painter.setBrush(QtGui.QColor(PALETTE["accent"]))
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(rect, 8, 8)
+
+    painter.end()
+    return QtGui.QIcon(pixmap)
+
+
 class GridWidget(QtWidgets.QWidget):
     """Widget that paints a faint grid background."""
 
