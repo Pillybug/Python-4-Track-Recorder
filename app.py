@@ -30,6 +30,75 @@ PALETTE = {
     "waveform_live": "#ff8b75",
 }
 
+_GRADIENT_FALLBACK_WARNED = False
+
+
+def _fill_linear_gradient(
+    painter: QtGui.QPainter,
+    rect: QtCore.QRect,
+    start: QtGui.QColor | str,
+    end: QtGui.QColor | str,
+) -> None:
+    """Fill ``rect`` with a gradient when supported, otherwise a solid colour."""
+
+    global _GRADIENT_FALLBACK_WARNED
+
+    start_color = QtGui.QColor(start)
+    end_color = QtGui.QColor(end)
+
+    gradient: QtGui.QLinearGradient | None
+    try:
+        gradient = QtGui.QLinearGradient(rect.topLeft(), rect.bottomRight())
+    except Exception as exc:  # pragma: no cover - depends on Qt build
+        gradient = None
+        if not _GRADIENT_FALLBACK_WARNED:
+            print("Unable to create linear gradient, falling back to solid fill:", exc)
+            _GRADIENT_FALLBACK_WARNED = True
+    if gradient is not None:
+        gradient.setColorAt(0.0, start_color)
+        gradient.setColorAt(1.0, end_color)
+        painter.fillRect(rect, QtGui.QBrush(gradient))
+        return
+
+    fallback = QtGui.QColor(
+        int((start_color.red() + end_color.red()) / 2),
+        int((start_color.green() + end_color.green()) / 2),
+        int((start_color.blue() + end_color.blue()) / 2),
+        int((start_color.alpha() + end_color.alpha()) / 2),
+    )
+    painter.fillRect(rect, fallback)
+
+
+def create_transport_icon(kind: str, size: int = 64) -> QtGui.QIcon:
+    """Create an in-memory icon for transport controls."""
+
+    pixmap = QtGui.QPixmap(size, size)
+    pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+    painter = QtGui.QPainter(pixmap)
+    painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+    rect = QtCore.QRectF(6, 6, size - 12, size - 12)
+
+    if kind == "record":
+        painter.setBrush(QtGui.QColor(PALETTE["record_active"]))
+        painter.setPen(QtGui.QPen(QtGui.QColor(PALETTE["record_active"])))
+        painter.drawEllipse(rect)
+    elif kind == "play":
+        painter.setBrush(QtGui.QColor(PALETTE["accent_active"]))
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        path = QtGui.QPainterPath()
+        path.moveTo(rect.left(), rect.top())
+        path.lineTo(rect.right(), rect.center().y())
+        path.lineTo(rect.left(), rect.bottom())
+        path.closeSubpath()
+        painter.drawPath(path)
+    else:
+        painter.setBrush(QtGui.QColor(PALETTE["accent"]))
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(rect, 8, 8)
+
+    painter.end()
+    return QtGui.QIcon(pixmap)
+
 
 def create_transport_icon(kind: str, size: int = 64) -> QtGui.QIcon:
     """Create an in-memory icon for transport controls."""
@@ -161,14 +230,13 @@ class WaveformView(QtWidgets.QWidget):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
         rect = self.rect()
-        gradient = QtGui.QLinearGradient(rect.topLeft(), rect.bottomRight())
         if self._live_mode:
-            gradient.setColorAt(0.0, QtGui.QColor(PALETTE["waveform_live"]).lighter(140))
-            gradient.setColorAt(1.0, QtGui.QColor(PALETTE["waveform_live"]).lighter(190))
+            start_color = QtGui.QColor(PALETTE["waveform_live"]).lighter(140)
+            end_color = QtGui.QColor(PALETTE["waveform_live"]).lighter(190)
         else:
-            gradient.setColorAt(0.0, QtGui.QColor(255, 255, 255, 120))
-            gradient.setColorAt(1.0, QtGui.QColor(PALETTE["highlight"]))
-        painter.fillRect(rect, gradient)
+            start_color = QtGui.QColor(255, 255, 255, 120)
+            end_color = QtGui.QColor(PALETTE["highlight"])
+        _fill_linear_gradient(painter, rect, start_color, end_color)
 
         painter.setPen(QtGui.QPen(QtGui.QColor(PALETTE["timeline_grid"])))
         for y in range(0, rect.height(), 30):
@@ -220,10 +288,12 @@ class EQCurveWidget(QtWidgets.QWidget):
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
         rect = self.rect().adjusted(12, 12, -12, -12)
 
-        bg = QtGui.QLinearGradient(rect.topLeft(), rect.bottomRight())
-        bg.setColorAt(0.0, QtGui.QColor(PALETTE["highlight"]))
-        bg.setColorAt(1.0, QtGui.QColor(255, 255, 255, 180))
-        painter.fillRect(rect, bg)
+        _fill_linear_gradient(
+            painter,
+            rect,
+            QtGui.QColor(PALETTE["highlight"]),
+            QtGui.QColor(255, 255, 255, 180),
+        )
 
         painter.setPen(QtGui.QPen(QtGui.QColor(PALETTE["timeline_grid"])) )
         for step in range(5):
